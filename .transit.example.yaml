@@ -1,0 +1,46 @@
+version: v1
+#logging:
+#  development: true
+services:
+  rabbit:
+    protocol: rabbit
+    url: amqp://guest:guest@127.0.0.1:5672
+    exchange:
+      name: testExchange
+      kind: direct
+      durable: true
+      autoDelete: false
+    queue:
+      name: testQueue
+      durable: true
+      autoDelete: false
+      exclusive: false
+    consumer:
+      tag: simple-consumer
+      autoAck: false
+      exclusive: false
+routes:
+  web:
+    protocol: http
+    endpoint: http://localhost:8080
+    contentType: application/json
+  secureWeb:
+    protocol: http
+    endpoint: https://localhost:8081
+    contentType: application/json
+  secureWeb2:
+    protocol: http
+    endpoint: https://localhost:8082
+    contentType: application/xml
+  stdout:
+    protocol: console
+retry:
+  protocol: nsq
+  topic: retry
+  channel: transit_retry
+  hostname: 127.0.0.1:4150
+  nsqlookupd: 127.0.0.1:4161
+  jitter:
+    attempts: 10
+    min: 1000
+    max: 10000

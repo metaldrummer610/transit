@@ -41,7 +41,7 @@ type router struct {
 func NewRouter(ctx context.Context) *router {
 	r := &router{
 		ctx:      ctx,
-		messages: make(chan domain.Message),
+		messages: make(chan domain.Message, 100),
 		routes:   make(map[string]domain.Route),
 		services: make(map[string]domain.Service),
 	}
@@ -79,7 +79,7 @@ func (r *router) AllServices() []string {
 }
 
 func (r *router) Run() {
-	for i := 0; i < 100000; i++ {
+	for i := 0; i < 10; i++ {
 		go r.run()
 	}
 }

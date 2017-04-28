@@ -57,17 +57,20 @@ type RabbitConfig struct {
 	}
 }
 
-type rabbitService struct {
+// RabbitClient wraps the common functionality of a RabbitMQ client (either a producer or a consumer)
+type RabbitClient struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
 	config  *RabbitConfig
+	queue   amqp.Queue
+}
+
+type rabbitService struct {
+	client *RabbitClient
 }
 
 type rabbitRoute struct {
-	conn    *amqp.Connection
-	channel *amqp.Channel
-	queue   amqp.Queue
-	config  *RabbitConfig
+	client *RabbitClient
 }
 
 func init() {
@@ -77,9 +80,10 @@ func init() {
 			Logger().Error("Unable to unmarshal rabbit configuration!", zap.Error(err))
 		}
 
-		return &rabbitService{
-			config: &config,
-		}
+		client := &RabbitClient{config: &config}
+		client.Connect()
+
+		return &rabbitService{client: client}
 	}
 
 	routeRegistry["rabbit"] = func(v *viper.Viper) Route {
@@ -88,67 +92,21 @@ func init() {
 			Logger().Error("Unable to unmarshal rabbit configuration!", zap.Error(err))
 		}
 
-		rabbit := &rabbitRoute{
-			config: &config,
-		}
+		client := &RabbitClient{config: &config}
+		client.Connect()
 
-		rabbit.connect()
-		return rabbit
+		return &rabbitRoute{client: client}
 	}
 }
 
 func (r*rabbitService) Run(ctx context.Context, messages chan Message) (error) {
 	Logger().Info("Rabbit listener started")
-	var err error
-	r.conn, err = amqp.Dial(r.config.Url)
 
-	if err != nil {
-		Logger().Error("Unable to connect to rabbit!",
-			zap.Error(err),
-			zap.String("url", r.config.Url),
-		)
-		return err
-	}
-
-	r.channel, err = r.conn.Channel()
-	if err != nil {
-		Logger().Error("Unable to obtain a channel!", zap.Error(err))
-		return err
-	}
-
-	r.channel.Qos(2, 0, true)
-
-	if err = r.channel.ExchangeDeclare(
-		r.config.Exchange.Name,
-		r.config.Exchange.Kind,
-		r.config.Exchange.Durable,
-		r.config.Exchange.AutoDelete,
-		false,
-		false,
-		nil,
-	); err != nil {
-		Logger().Error("Unable to declare an exchange!", zap.Error(err))
-		return err
-	}
-
-	queue, err := r.channel.QueueDeclare(
-		r.config.Queue.Name,
-		r.config.Queue.Durable,
-		r.config.Queue.AutoDelete,
-		r.config.Queue.Exclusive,
-		false,
-		nil,
-	)
-	if err != nil {
-		Logger().Error("Unable to declare a queue!", zap.Error(err))
-		return err
-	}
-
-	deliveries, err := r.channel.Consume(
-		queue.Name,
-		r.config.Consumer.Tag,
-		r.config.Consumer.AutoAck,
-		r.config.Consumer.Exclusive,
+	deliveries, err := r.client.channel.Consume(
+		r.client.queue.Name,
+		r.client.config.Consumer.Tag,
+		r.client.config.Consumer.AutoAck,
+		r.client.config.Consumer.Exclusive,
 		false,
 		false,
 		nil,
@@ -195,14 +153,31 @@ func (r*rabbitService) Run(ctx context.Context, messages chan Message) (error) {
 	}
 
 done:
-	r.channel.Close()
-	r.conn.Close()
+	r.client.Close()
 
 	Logger().Info("Rabbit listener complete")
 	return nil
 }
 
-func (r *rabbitRoute) connect() error {
+func (r *rabbitRoute) Write(message Message) error {
+	body, err := proto.Marshal(&message)
+
+	if err != nil {
+		Logger().Error("Failed to write message to NSQ topic!",
+			zap.Error(err),
+		)
+		return err
+	}
+
+	pub := amqp.Publishing{
+		DeliveryMode: amqp.Persistent,
+		Body:         body,
+	}
+
+	return r.client.channel.Publish("", r.client.queue.Name, false, false, pub)
+}
+
+func (r *RabbitClient) Connect() error {
 	var err error
 
 	if r.conn, err = amqp.Dial(r.config.Url); err != nil {
@@ -244,25 +219,11 @@ func (r *rabbitRoute) connect() error {
 	return nil
 }
 
-func (r *rabbitRoute) Write(message Message) error {
-	body, err := proto.Marshal(&message)
-
-	if err != nil {
-		Logger().Error("Failed to write message to NSQ topic!",
-			zap.Error(err),
-		)
-		return err
-	}
-
-	pub := amqp.Publishing{
-		DeliveryMode: amqp.Persistent,
-		Body:         body,
-	}
-
-	return r.channel.Publish("", r.queue.Name, false, false, pub)
+func (r *RabbitClient) Close() {
+	r.channel.Close()
+	r.conn.Close()
 }
 
 func (r *rabbitRoute) Close() {
-	r.channel.Close()
-	r.conn.Close()
+	r.client.Close()
 }

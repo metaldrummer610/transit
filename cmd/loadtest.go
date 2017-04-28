@@ -28,6 +28,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/streadway/amqp"
 	"go.uber.org/zap"
+	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/http"
@@ -161,7 +162,16 @@ func createWebConsumer(v *viper.Viper) {
 
 	server := &http.Server{Addr: fmt.Sprintf(":%s", port)}
 	http.HandleFunc("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(time.Duration(int(rand.Int31n(1)) * int(time.Second)))
+		defer r.Body.Close()
+		ioutil.ReadAll(r.Body)
+
+		time.Sleep(time.Duration(int(rand.Intn(1)) * int(time.Second)))
+
+		rand.Seed(time.Now().UnixNano())
+		value := rand.Intn(100) + 1
+		if value <= 25 {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
 	}))
 
 	domain.Logger().Info("Starting http server")
